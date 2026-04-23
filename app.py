@@ -126,21 +126,32 @@ if st.button("Predict Demand"):
 st.header("📊 Feature Importance")
 
 if hasattr(model, "feature_importances_"):
-    importance = pd.DataFrame({
-        'Feature': ['hr', 'temp', 'hum', 'windspeed', 'is_weekend'],
-        'Importance': model.feature_importances_
-    }).sort_values(by='Importance', ascending=False)
+    try:
+        # If pipeline
+        if hasattr(model, "named_steps"):
+            feature_names = model.named_steps['preprocessor'].get_feature_names_out()
+            importances = model.named_steps['model'].feature_importances_
+        else:
+            feature_names = model.feature_names_in_
+            importances = model.feature_importances_
 
-    fig_imp = px.bar(
-        importance,
-        x='Importance',
-        y='Feature',
-        orientation='h',
-        title="Model Feature Importance"
-    )
-    st.plotly_chart(fig_imp, use_container_width=True)
-else:
-    st.warning("Model does not support feature importance (use tree-based models)")
+        importance = pd.DataFrame({
+            'Feature': feature_names,
+            'Importance': importances
+        }).sort_values(by='Importance', ascending=False)
+
+        fig_imp = px.bar(
+            importance,
+            x='Importance',
+            y='Feature',
+            orientation='h',
+            title="Feature Importance"
+        )
+
+        st.plotly_chart(fig_imp, use_container_width=True)
+
+    except Exception as e:
+        st.error(f"Feature importance error: {e}")
 
 # -------------------------------
 # EXISTING VISUALS
