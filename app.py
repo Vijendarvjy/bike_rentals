@@ -31,6 +31,51 @@ def load_data():
 
     df['time_category'] = df['hr'].apply(categorize_hour)
     return df
+# -------------------------------
+# ADVANCED PIE / DONUT CHART
+# -------------------------------
+st.subheader("🚦 Demand Distribution by Time Category")
+
+pie_data = (
+    filtered_data
+    .groupby('time_category')['cnt']
+    .sum()
+    .reset_index()
+    .sort_values(by='cnt', ascending=False)
+)
+
+# Highlight highest segment
+pull_values = [0.1 if i == 0 else 0 for i in range(len(pie_data))]
+
+fig_pie = px.pie(
+    pie_data,
+    values='cnt',
+    names='time_category',
+    hole=0.5,  # donut style
+    color='cnt',
+    color_continuous_scale='Turbo'  # 🔥 modern vibrant scale
+)
+
+fig_pie.update_traces(
+    textinfo='percent+label+value',
+    pull=pull_values,
+    marker=dict(line=dict(color='#000000', width=1))
+)
+
+# Add center annotation (KPI style)
+total = int(pie_data['cnt'].sum())
+
+fig_pie.update_layout(
+    annotations=[dict(
+        text=f"Total<br><b>{total}</b>",
+        x=0.5, y=0.5,
+        font_size=18,
+        showarrow=False
+    )],
+    showlegend=True
+)
+
+st.plotly_chart(fig_pie, use_container_width=True)
 
 # -------------------------------
 # LOAD MODEL
