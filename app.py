@@ -1,6 +1,5 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
 import plotly.express as px
 import joblib
 
@@ -8,6 +7,28 @@ import joblib
 # PAGE CONFIG
 # -------------------------------
 st.set_page_config(page_title='🚲 Bike Rental Dashboard', layout='wide')
+
+# -------------------------------
+# HELPER FUNCTIONS
+# -------------------------------
+def categorize_hour(hour):
+    if 7 <= hour <= 9:
+        return 'Morning Rush'
+    elif 17 <= hour <= 19:
+        return 'Evening Rush'
+    elif 0 <= hour <= 5:
+        return 'Low Demand'
+    else:
+        return 'Normal Hours'
+
+def encode_time_category(cat):
+    mapping = {
+        'Low Demand': 0,
+        'Normal Hours': 1,
+        'Morning Rush': 2,
+        'Evening Rush': 3
+    }
+    return mapping.get(cat, 1)
 
 # -------------------------------
 # LOAD DATA
@@ -18,17 +39,6 @@ def load_data():
     df['dteday'] = pd.to_datetime(df['dteday'])
     df['day_name'] = df['dteday'].dt.day_name()
     df['is_weekend'] = df['dteday'].dt.dayofweek.apply(lambda x: 1 if x >= 5 else 0)
-
-    def categorize_hour(hour):
-        if 7 <= hour <= 9:
-            return 'Morning Rush'
-        elif 17 <= hour <= 19:
-            return 'Evening Rush'
-        elif 0 <= hour <= 5:
-            return 'Low Demand'
-        else:
-            return 'Normal Hours'
-
     df['time_category'] = df['hr'].apply(categorize_hour)
     return df
 
@@ -39,18 +49,18 @@ def load_data():
 def load_model():
     try:
         return joblib.load("tuned_xgboost_model.pkl")
-    except Exception as e:
-        st.warning("⚠️ Model not loaded. Prediction disabled.")
+    except:
+        st.warning("⚠️ Model not loaded")
         return None
 
 # -------------------------------
-# LOAD EVERYTHING
+# LOAD
 # -------------------------------
 data = load_data()
 model = load_model()
 
 # -------------------------------
-# SIDEBAR FILTERS (DEFINE FIRST)
+# SIDEBAR FILTERS
 # -------------------------------
 st.sidebar.title("🔍 Filters")
 
@@ -81,7 +91,7 @@ col3.metric("Peak Hour", int(filtered_data.groupby('hr')['cnt'].mean().idxmax())
 st.markdown("---")
 
 # -------------------------------
-# ADVANCED DONUT CHART
+# DONUT CHART
 # -------------------------------
 st.subheader("🚦 Demand Distribution by Time Category")
 
@@ -90,10 +100,7 @@ pie_data = (
     .groupby('time_category')['cnt']
     .sum()
     .reset_index()
-    .sort_values(by='cnt', ascending=False)
 )
-
-pull_values = [0.1 if i == 0 else 0 for i in range(len(pie_data))]
 
 fig_pie = px.pie(
     pie_data,
@@ -104,27 +111,10 @@ fig_pie = px.pie(
     color_discrete_sequence=px.colors.qualitative.Bold
 )
 
-fig_pie.update_traces(
-    textinfo='percent+label',
-    pull=pull_values,
-    marker=dict(line=dict(color='#000000', width=1))
-)
-
-total = int(pie_data['cnt'].sum())
-
-fig_pie.update_layout(
-    annotations=[dict(
-        text=f"<b>Total</b><br>{total}",
-        x=0.5, y=0.5,
-        font_size=20,
-        showarrow=False
-    )]
-)
-
 st.plotly_chart(fig_pie, use_container_width=True)
 
 # -------------------------------
-# PREDICTION SECTION
+# PREDICTION
 # -------------------------------
 st.header("🔮 Predict Bike Demand")
 
@@ -138,19 +128,12 @@ p4, p5 = st.columns(2)
 windspeed = p4.slider("Windspeed", 0.0, 1.0, 0.2)
 is_weekend_input = p5.selectbox("Day Type", ["Weekday", "Weekend"])
 
-def categorize_hour(hour):
-    if 7 <= hour <= 9:
-        return 'Morning Rush'
-    elif 17 <= hour <= 19:
-        return 'Evening Rush'
-    elif 0 <= hour <= 5:
-        return 'Low Demand'
-    else:
-        return 'Normal Hours'
-
-time_category = categorize_hour(hour)
+# Encode features
+time_category_raw = categorize_hour(hour)
+time_category = encode_time_category(time_category_raw)
 is_weekend_val = 1 if is_weekend_input == "Weekend" else 0
 
+# Input dataframe (ALL NUMERIC)
 input_df = pd.DataFrame({
     'hr': [hour],
     'temp': [temp],
@@ -164,44 +147,31 @@ if st.button("Predict Demand"):
     if model is not None:
         try:
             prediction = model.predict(input_df)[0]
-            st.success(f"🚲 Predicted Bike Rentals: {int(prediction)}")
+            st.success(f"🚲 Predicted Rentals: {int(prediction)}")
         except Exception as e:
             st.error(f"Prediction failed: {e}")
     else:
-        st.warning("Model not available.")
+        st.warning("Model not available")
 
 # -------------------------------
 # FEATURE IMPORTANCE
 # -------------------------------
 st.header("📊 Feature Importance")
 
-if model is not None:
-    try:
-        if hasattr(model, "named_steps"):
-            feature_names = model.named_steps['preprocessor'].get_feature_names_out()
-            importances = model.named_steps['model'].feature_importances_
-        elif hasattr(model, "feature_importances_"):
-            feature_names = model.feature_names_in_
-            importances = model.feature_importances_
-        else:
-            raise Exception("Feature importance not supported")
+if model is not None and hasattr(model, "feature_importances_"):
+    importance = pd.DataFrame({
+        'Feature': model.feature_names_in_,
+        'Importance': model.feature_importances_
+    }).sort_values(by='Importance', ascending=False)
 
-        importance = pd.DataFrame({
-            'Feature': feature_names,
-            'Importance': importances
-        }).sort_values(by='Importance', ascending=False)
+    fig_imp = px.bar(
+        importance,
+        x='Importance',
+        y='Feature',
+        orientation='h'
+    )
 
-        fig_imp = px.bar(
-            importance,
-            x='Importance',
-            y='Feature',
-            orientation='h'
-        )
-
-        st.plotly_chart(fig_imp, use_container_width=True)
-
-    except Exception as e:
-        st.warning(f"Feature importance not available: {e}")
+    st.plotly_chart(fig_imp, use_container_width=True)
 
 # -------------------------------
 # HOURLY TREND
@@ -216,4 +186,4 @@ st.plotly_chart(fig, use_container_width=True)
 # -------------------------------
 # FOOTER
 # -------------------------------
-st.info("Ensure model was trained with same preprocessing pipeline.")
+st.info("Ensure model training used same feature encoding.")
