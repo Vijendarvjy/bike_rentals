@@ -9,181 +9,155 @@ import joblib
 st.set_page_config(page_title='🚲 Bike Rental Dashboard', layout='wide')
 
 # -------------------------------
-# HELPER FUNCTIONS
-# -------------------------------
-def categorize_hour(hour):
-    if 7 <= hour <= 9:
-        return 'Morning Rush'
-    elif 17 <= hour <= 19:
-        return 'Evening Rush'
-    elif 0 <= hour <= 5:
-        return 'Low Demand'
-    else:
-        return 'Normal Hours'
-
-def encode_time_category(cat):
-    mapping = {
-        'Low Demand': 0,
-        'Normal Hours': 1,
-        'Morning Rush': 2,
-        'Evening Rush': 3
-    }
-    return mapping.get(cat, 1)
-
-# -------------------------------
-# LOAD DATA
-# -------------------------------
-@st.cache_data
-def load_data():
-    df = pd.read_csv('hour.csv')
-    df['dteday'] = pd.to_datetime(df['dteday'])
-    df['day_name'] = df['dteday'].dt.day_name()
-    df['is_weekend'] = df['dteday'].dt.dayofweek.apply(lambda x: 1 if x >= 5 else 0)
-    df['time_category'] = df['hr'].apply(categorize_hour)
-    return df
-
-# -------------------------------
 # LOAD MODEL
 # -------------------------------
 @st.cache_resource
 def load_model():
-    try:
-        return joblib.load("tuned_xgboost_model.pkl")
-    except:
-        st.warning("⚠️ Model not loaded")
-        return None
+    return joblib.load("tuned_xgboost_model.pkl")
 
-# -------------------------------
-# LOAD
-# -------------------------------
-data = load_data()
 model = load_model()
 
 # -------------------------------
-# SIDEBAR FILTERS
+# REQUIRED FEATURES (FROM MODEL)
 # -------------------------------
-st.sidebar.title("🔍 Filters")
+MODEL_FEATURES = model.feature_names_in_
 
-day_type = st.sidebar.multiselect(
-    "Day Type",
-    ['Weekday', 'Weekend'],
-    default=['Weekday', 'Weekend']
-)
+# -------------------------------
+# HELPER: CREATE INPUT VECTOR
+# -------------------------------
+def create_feature_vector(input_dict):
+    df = pd.DataFrame(columns=MODEL_FEATURES)
+    df.loc[0] = 0  # initialize all as 0
 
-filtered_data = data[
-    data['is_weekend'].map({0: 'Weekday', 1: 'Weekend'}).isin(day_type)
-]
+    # Numerical features
+    numeric_cols = ['temp', 'atemp', 'hum', 'windspeed', 'yr', 'holiday', 'workingday', 'day_of_week', 'is_weekend']
+    for col in numeric_cols:
+        if col in df.columns:
+            df.at[0, col] = input_dict.get(col, 0)
+
+    # One-hot encoding manually
+    def set_one_hot(prefix, value):
+        col_name = f"{prefix}_{value}"
+        if col_name in df.columns:
+            df.at[0, col_name] = 1
+
+    # Apply encodings
+    set_one_hot('hr', input_dict['hr'])
+    set_one_hot('mnth', input_dict['mnth'])
+    set_one_hot('weekday', input_dict['weekday'])
+    set_one_hot('season', input_dict['season'])
+    set_one_hot('weathersit', input_dict['weathersit'])
+
+    # time_category encoding
+    if input_dict['time_category'] == 'Low Demand':
+        col = 'time_category_Low Demand'
+    elif input_dict['time_category'] == 'Morning Rush':
+        col = 'time_category_Morning Rush'
+    else:
+        col = 'time_category_Normal Hours'
+
+    if col in df.columns:
+        df.at[0, col] = 1
+
+    return df
 
 # -------------------------------
 # TITLE
 # -------------------------------
-st.title("🚲 Bike Rental Analytics + Prediction")
+st.title("🚲 Bike Rental Prediction Dashboard")
 
 # -------------------------------
-# KPI METRICS
+# INPUTS
 # -------------------------------
-col1, col2, col3 = st.columns(3)
+st.header("🔮 Predict Bike Demand")
 
-col1.metric("Total Rentals", int(filtered_data['cnt'].sum()))
-col2.metric("Avg Rentals", round(filtered_data['cnt'].mean(), 2))
-col3.metric("Peak Hour", int(filtered_data.groupby('hr')['cnt'].mean().idxmax()))
+c1, c2, c3 = st.columns(3)
 
-st.markdown("---")
+hr = c1.slider("Hour", 0, 23, 10)
+temp = c2.slider("Temperature", 0.0, 1.0, 0.5)
+hum = c3.slider("Humidity", 0.0, 1.0, 0.5)
 
-# -------------------------------
-# DONUT CHART
-# -------------------------------
-st.subheader("🚦 Demand Distribution by Time Category")
+c4, c5, c6 = st.columns(3)
 
-pie_data = (
-    filtered_data
-    .groupby('time_category')['cnt']
-    .sum()
-    .reset_index()
-)
+windspeed = c4.slider("Windspeed", 0.0, 1.0, 0.2)
+mnth = c5.selectbox("Month", list(range(1, 13)))
+weekday = c6.selectbox("Weekday (0=Sun)", list(range(7)))
 
-fig_pie = px.pie(
-    pie_data,
-    values='cnt',
-    names='time_category',
-    hole=0.6,
-    color='time_category',
-    color_discrete_sequence=px.colors.qualitative.Bold
-)
+c7, c8, c9 = st.columns(3)
 
-st.plotly_chart(fig_pie, use_container_width=True)
+season = c7.selectbox("Season (1-4)", [1,2,3,4])
+weathersit = c8.selectbox("Weather (1-4)", [1,2,3,4])
+is_weekend = c9.selectbox("Weekend?", [0,1])
+
+# Derived features
+workingday = 0 if is_weekend == 1 else 1
+holiday = 0
+yr = 1
+day_of_week = weekday
+
+# Time category
+def categorize_hour(h):
+    if 7 <= h <= 9:
+        return 'Morning Rush'
+    elif 17 <= h <= 19:
+        return 'Morning Rush'  # merged to match model
+    elif 0 <= h <= 5:
+        return 'Low Demand'
+    else:
+        return 'Normal Hours'
+
+time_category = categorize_hour(hr)
+
+# Build input dict
+input_dict = {
+    'hr': hr,
+    'temp': temp,
+    'atemp': temp,
+    'hum': hum,
+    'windspeed': windspeed,
+    'mnth': mnth,
+    'weekday': weekday,
+    'season': season,
+    'weathersit': weathersit,
+    'is_weekend': is_weekend,
+    'workingday': workingday,
+    'holiday': holiday,
+    'yr': yr,
+    'day_of_week': day_of_week,
+    'time_category': time_category
+}
 
 # -------------------------------
 # PREDICTION
 # -------------------------------
-st.header("🔮 Predict Bike Demand")
-
-p1, p2, p3 = st.columns(3)
-
-hour = p1.slider("Hour", 0, 23, 10)
-temp = p2.slider("Temperature", 0.0, 1.0, 0.5)
-hum = p3.slider("Humidity", 0.0, 1.0, 0.5)
-
-p4, p5 = st.columns(2)
-windspeed = p4.slider("Windspeed", 0.0, 1.0, 0.2)
-is_weekend_input = p5.selectbox("Day Type", ["Weekday", "Weekend"])
-
-# Encode features
-time_category_raw = categorize_hour(hour)
-time_category = encode_time_category(time_category_raw)
-is_weekend_val = 1 if is_weekend_input == "Weekend" else 0
-
-# Input dataframe (ALL NUMERIC)
-input_df = pd.DataFrame({
-    'hr': [hour],
-    'temp': [temp],
-    'hum': [hum],
-    'windspeed': [windspeed],
-    'is_weekend': [is_weekend_val],
-    'time_category': [time_category]
-})
-
 if st.button("Predict Demand"):
-    if model is not None:
-        try:
-            prediction = model.predict(input_df)[0]
-            st.success(f"🚲 Predicted Rentals: {int(prediction)}")
-        except Exception as e:
-            st.error(f"Prediction failed: {e}")
-    else:
-        st.warning("Model not available")
+    try:
+        input_df = create_feature_vector(input_dict)
+        prediction = model.predict(input_df)[0]
+        st.success(f"🚲 Predicted Rentals: {int(prediction)}")
+    except Exception as e:
+        st.error(f"Prediction failed: {e}")
 
 # -------------------------------
 # FEATURE IMPORTANCE
 # -------------------------------
 st.header("📊 Feature Importance")
 
-if model is not None and hasattr(model, "feature_importances_"):
+if hasattr(model, "feature_importances_"):
     importance = pd.DataFrame({
         'Feature': model.feature_names_in_,
         'Importance': model.feature_importances_
-    }).sort_values(by='Importance', ascending=False)
+    }).sort_values(by='Importance', ascending=False).head(20)
 
-    fig_imp = px.bar(
+    fig = px.bar(
         importance,
         x='Importance',
         y='Feature',
         orientation='h'
     )
-
-    st.plotly_chart(fig_imp, use_container_width=True)
-
-# -------------------------------
-# HOURLY TREND
-# -------------------------------
-st.subheader("📈 Hourly Trends")
-
-hourly = filtered_data.groupby('hr')['cnt'].mean().reset_index()
-
-fig = px.line(hourly, x='hr', y='cnt', markers=True)
-st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True)
 
 # -------------------------------
 # FOOTER
 # -------------------------------
-st.info("Ensure model training used same feature encoding.")
+st.info("Model uses one-hot encoded features. Input is auto-transformed.")
