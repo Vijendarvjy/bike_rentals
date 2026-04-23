@@ -2,75 +2,157 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
-import pickle
+import joblib
 
-# Set Page Config
-st.set_page_config(page_title='Bike Rental Dashboard', layout='wide')
+# -------------------------------
+# PAGE CONFIG
+# -------------------------------
+st.set_page_config(page_title='🚲 Bike Rental Dashboard', layout='wide')
 
-# 1. Load Data and Model
+# -------------------------------
+# LOAD DATA
+# -------------------------------
 @st.cache_data
 def load_data():
     df = pd.read_csv('hour.csv')
     df['dteday'] = pd.to_datetime(df['dteday'])
     df['day_name'] = df['dteday'].dt.day_name()
-    df['is_weekend'] = df['dteday'].dt.dayofweek.apply(lambda x: 'Weekend' if x >= 5 else 'Weekday')
+    df['is_weekend'] = df['dteday'].dt.dayofweek.apply(lambda x: 1 if x >= 5 else 0)
 
     def categorize_hour(hour):
-        if 7 <= hour <= 9: return 'Morning Rush'
-        elif 17 <= hour <= 19: return 'Evening Rush'
-        elif 0 <= hour <= 5: return 'Low Demand'
-        else: return 'Normal Hours'
+        if 7 <= hour <= 9:
+            return 'Morning Rush'
+        elif 17 <= hour <= 19:
+            return 'Evening Rush'
+        elif 0 <= hour <= 5:
+            return 'Low Demand'
+        else:
+            return 'Normal Hours'
 
     df['time_category'] = df['hr'].apply(categorize_hour)
     return df
 
+# -------------------------------
+# LOAD MODEL
+# -------------------------------
+@st.cache_resource
+def load_model():
+    return joblib.load("tuned_xgboost_model.pkl")
+
 data = load_data()
+model = load_model()
 
-# Sidebar
-st.sidebar.title("Dashboard Filters")
-selected_day_type = st.sidebar.multiselect("Select Day Type", options=['Weekday', 'Weekend'], default=['Weekday', 'Weekend'])
-filtered_data = data[data['is_weekend'].isin(selected_day_type)]
+# -------------------------------
+# SIDEBAR FILTERS
+# -------------------------------
+st.sidebar.title("🔍 Filters")
 
-st.title("🚲 Bike Rental Analytics Dashboard")
-st.markdown("--- ")
-
-# Layout Columns
-col1, col2 = st.columns(2)
-
-with col1:
-    st.subheader("Weekday vs Weekend Distribution")
-    fig_day_type = px.bar(
-        filtered_data.groupby('is_weekend')['cnt'].mean().reset_index(),
-        x='is_weekend', y='cnt', color='is_weekend', 
-        color_discrete_sequence=px.colors.qualitative.Pastel,
-        labels={'cnt': 'Avg Rentals', 'is_weekend': 'Day Type'}
-    )
-    st.plotly_chart(fig_day_type, use_container_width=True)
-
-with col2:
-    st.subheader("Peak vs Normal Hours Demand")
-    fig_peak = px.pie(
-        filtered_data.groupby('time_category')['cnt'].sum().reset_index(),
-        values='cnt', names='time_category', 
-        hole=0.4, color_discrete_sequence=px.colors.sequential.RdBu
-    )
-    st.plotly_chart(fig_peak, use_container_width=True)
-
-st.subheader("Hourly Rental Trends (Day-wise Comparison)")
-hourly_data = filtered_data.groupby(['hr', 'is_weekend'])['cnt'].mean().reset_index()
-fig_hourly = px.line(
-    hourly_data, x='hr', y='cnt', color='is_weekend', 
-    markers=True, line_shape='spline', color_discrete_sequence=['#636EFA', '#EF553B']
+day_type = st.sidebar.multiselect(
+    "Day Type",
+    ['Weekday', 'Weekend'],
+    default=['Weekday', 'Weekend']
 )
-st.plotly_chart(fig_hourly, use_container_width=True)
 
-st.subheader("Daily Usage Patterns")
-daywise_avg = filtered_data.groupby('day_name')['cnt'].mean().reindex(['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']).reset_index()
-fig_daywise = px.bar(
-    daywise_avg, x='day_name', y='cnt', color='cnt', 
-    color_continuous_scale='Viridis',
-    labels={'cnt': 'Avg Total Rentals'}
-)
-st.plotly_chart(fig_daywise, use_container_width=True)
+filtered_data = data[data['is_weekend'].map({0:'Weekday',1:'Weekend'}).isin(day_type)]
 
-st.info("Note: To run this app locally, install streamlit and run: streamlit run app.py")
+# -------------------------------
+# TITLE
+# -------------------------------
+st.title("🚲 Bike Rental Analytics + Prediction")
+
+# -------------------------------
+# KPI METRICS
+# -------------------------------
+col1, col2, col3 = st.columns(3)
+
+col1.metric("Total Rentals", int(filtered_data['cnt'].sum()))
+col2.metric("Avg Rentals", round(filtered_data['cnt'].mean(), 2))
+col3.metric("Peak Hour", filtered_data.groupby('hr')['cnt'].mean().idxmax())
+
+st.markdown("---")
+
+# -------------------------------
+# PREDICTION SECTION
+# -------------------------------
+st.header("🔮 Predict Bike Demand")
+
+p1, p2, p3 = st.columns(3)
+
+hour = p1.slider("Hour", 0, 23, 10)
+temp = p2.slider("Temperature", 0.0, 1.0, 0.5)
+hum = p3.slider("Humidity", 0.0, 1.0, 0.5)
+
+p4, p5 = st.columns(2)
+windspeed = p4.slider("Windspeed", 0.0, 1.0, 0.2)
+is_weekend_input = p5.selectbox("Day Type", ["Weekday", "Weekend"])
+
+# Feature Engineering for Prediction
+def categorize_hour(hour):
+    if 7 <= hour <= 9:
+        return 'Morning Rush'
+    elif 17 <= hour <= 19:
+        return 'Evening Rush'
+    elif 0 <= hour <= 5:
+        return 'Low Demand'
+    else:
+        return 'Normal Hours'
+
+time_category = categorize_hour(hour)
+is_weekend_val = 1 if is_weekend_input == "Weekend" else 0
+
+# Create input dataframe
+input_df = pd.DataFrame({
+    'hr': [hour],
+    'temp': [temp],
+    'hum': [hum],
+    'windspeed': [windspeed],
+    'is_weekend': [is_weekend_val],
+    'time_category': [time_category]
+})
+
+# NOTE: If your model used encoding (OneHotEncoder), you MUST use pipeline
+prediction = None
+
+if st.button("Predict Demand"):
+    try:
+        prediction = model.predict(input_df)[0]
+        st.success(f"🚲 Predicted Bike Rentals: {int(prediction)}")
+    except Exception as e:
+        st.error(f"Prediction failed: {e}")
+
+# -------------------------------
+# FEATURE IMPORTANCE
+# -------------------------------
+st.header("📊 Feature Importance")
+
+if hasattr(model, "feature_importances_"):
+    importance = pd.DataFrame({
+        'Feature': ['hr', 'temp', 'hum', 'windspeed', 'is_weekend'],
+        'Importance': model.feature_importances_
+    }).sort_values(by='Importance', ascending=False)
+
+    fig_imp = px.bar(
+        importance,
+        x='Importance',
+        y='Feature',
+        orientation='h',
+        title="Model Feature Importance"
+    )
+    st.plotly_chart(fig_imp, use_container_width=True)
+else:
+    st.warning("Model does not support feature importance (use tree-based models)")
+
+# -------------------------------
+# EXISTING VISUALS
+# -------------------------------
+st.subheader("Hourly Trends")
+
+hourly = filtered_data.groupby(['hr'])['cnt'].mean().reset_index()
+
+fig = px.line(hourly, x='hr', y='cnt', markers=True)
+st.plotly_chart(fig, use_container_width=True)
+
+# -------------------------------
+# FOOTER
+# -------------------------------
+st.info("Ensure model was trained with same feature pipeline.")
