@@ -31,64 +31,26 @@ def load_data():
 
     df['time_category'] = df['hr'].apply(categorize_hour)
     return df
-# -------------------------------
-# ADVANCED PIE / DONUT CHART
-# -------------------------------
-st.subheader("🚦 Demand Distribution by Time Category")
-
-pie_data = (
-    filtered_data
-    .groupby('time_category')['cnt']
-    .sum()
-    .reset_index()
-    .sort_values(by='cnt', ascending=False)
-)
-
-# Highlight highest segment
-pull_values = [0.1 if i == 0 else 0 for i in range(len(pie_data))]
-
-fig_pie = px.pie(
-    pie_data,
-    values='cnt',
-    names='time_category',
-    hole=0.5,  # donut style
-    color='cnt',
-    color_continuous_scale='Turbo'  # 🔥 modern vibrant scale
-)
-
-fig_pie.update_traces(
-    textinfo='percent+label+value',
-    pull=pull_values,
-    marker=dict(line=dict(color='#000000', width=1))
-)
-
-# Add center annotation (KPI style)
-total = int(pie_data['cnt'].sum())
-
-fig_pie.update_layout(
-    annotations=[dict(
-        text=f"Total<br><b>{total}</b>",
-        x=0.5, y=0.5,
-        font_size=18,
-        showarrow=False
-    )],
-    showlegend=True
-)
-
-st.plotly_chart(fig_pie, use_container_width=True)
 
 # -------------------------------
 # LOAD MODEL
 # -------------------------------
 @st.cache_resource
 def load_model():
-    return joblib.load("tuned_xgboost_model.pkl")
+    try:
+        return joblib.load("tuned_xgboost_model.pkl")
+    except Exception as e:
+        st.warning("⚠️ Model not loaded. Prediction disabled.")
+        return None
 
+# -------------------------------
+# LOAD EVERYTHING
+# -------------------------------
 data = load_data()
 model = load_model()
 
 # -------------------------------
-# SIDEBAR FILTERS
+# SIDEBAR FILTERS (DEFINE FIRST)
 # -------------------------------
 st.sidebar.title("🔍 Filters")
 
@@ -98,7 +60,9 @@ day_type = st.sidebar.multiselect(
     default=['Weekday', 'Weekend']
 )
 
-filtered_data = data[data['is_weekend'].map({0:'Weekday',1:'Weekend'}).isin(day_type)]
+filtered_data = data[
+    data['is_weekend'].map({0: 'Weekday', 1: 'Weekend'}).isin(day_type)
+]
 
 # -------------------------------
 # TITLE
@@ -112,9 +76,52 @@ col1, col2, col3 = st.columns(3)
 
 col1.metric("Total Rentals", int(filtered_data['cnt'].sum()))
 col2.metric("Avg Rentals", round(filtered_data['cnt'].mean(), 2))
-col3.metric("Peak Hour", filtered_data.groupby('hr')['cnt'].mean().idxmax())
+col3.metric("Peak Hour", int(filtered_data.groupby('hr')['cnt'].mean().idxmax()))
 
 st.markdown("---")
+
+# -------------------------------
+# ADVANCED DONUT CHART
+# -------------------------------
+st.subheader("🚦 Demand Distribution by Time Category")
+
+pie_data = (
+    filtered_data
+    .groupby('time_category')['cnt']
+    .sum()
+    .reset_index()
+    .sort_values(by='cnt', ascending=False)
+)
+
+pull_values = [0.1 if i == 0 else 0 for i in range(len(pie_data))]
+
+fig_pie = px.pie(
+    pie_data,
+    values='cnt',
+    names='time_category',
+    hole=0.6,
+    color='time_category',
+    color_discrete_sequence=px.colors.qualitative.Bold
+)
+
+fig_pie.update_traces(
+    textinfo='percent+label',
+    pull=pull_values,
+    marker=dict(line=dict(color='#000000', width=1))
+)
+
+total = int(pie_data['cnt'].sum())
+
+fig_pie.update_layout(
+    annotations=[dict(
+        text=f"<b>Total</b><br>{total}",
+        x=0.5, y=0.5,
+        font_size=20,
+        showarrow=False
+    )]
+)
+
+st.plotly_chart(fig_pie, use_container_width=True)
 
 # -------------------------------
 # PREDICTION SECTION
@@ -131,7 +138,6 @@ p4, p5 = st.columns(2)
 windspeed = p4.slider("Windspeed", 0.0, 1.0, 0.2)
 is_weekend_input = p5.selectbox("Day Type", ["Weekday", "Weekend"])
 
-# Feature Engineering for Prediction
 def categorize_hour(hour):
     if 7 <= hour <= 9:
         return 'Morning Rush'
@@ -145,7 +151,6 @@ def categorize_hour(hour):
 time_category = categorize_hour(hour)
 is_weekend_val = 1 if is_weekend_input == "Weekend" else 0
 
-# Create input dataframe
 input_df = pd.DataFrame({
     'hr': [hour],
     'temp': [temp],
@@ -155,30 +160,31 @@ input_df = pd.DataFrame({
     'time_category': [time_category]
 })
 
-# NOTE: If your model used encoding (OneHotEncoder), you MUST use pipeline
-prediction = None
-
 if st.button("Predict Demand"):
-    try:
-        prediction = model.predict(input_df)[0]
-        st.success(f"🚲 Predicted Bike Rentals: {int(prediction)}")
-    except Exception as e:
-        st.error(f"Prediction failed: {e}")
+    if model is not None:
+        try:
+            prediction = model.predict(input_df)[0]
+            st.success(f"🚲 Predicted Bike Rentals: {int(prediction)}")
+        except Exception as e:
+            st.error(f"Prediction failed: {e}")
+    else:
+        st.warning("Model not available.")
 
 # -------------------------------
 # FEATURE IMPORTANCE
 # -------------------------------
 st.header("📊 Feature Importance")
 
-if hasattr(model, "feature_importances_"):
+if model is not None:
     try:
-        # If pipeline
         if hasattr(model, "named_steps"):
             feature_names = model.named_steps['preprocessor'].get_feature_names_out()
             importances = model.named_steps['model'].feature_importances_
-        else:
+        elif hasattr(model, "feature_importances_"):
             feature_names = model.feature_names_in_
             importances = model.feature_importances_
+        else:
+            raise Exception("Feature importance not supported")
 
         importance = pd.DataFrame({
             'Feature': feature_names,
@@ -189,21 +195,20 @@ if hasattr(model, "feature_importances_"):
             importance,
             x='Importance',
             y='Feature',
-            orientation='h',
-            title="Feature Importance"
+            orientation='h'
         )
 
         st.plotly_chart(fig_imp, use_container_width=True)
 
     except Exception as e:
-        st.error(f"Feature importance error: {e}")
+        st.warning(f"Feature importance not available: {e}")
 
 # -------------------------------
-# EXISTING VISUALS
+# HOURLY TREND
 # -------------------------------
-st.subheader("Hourly Trends")
+st.subheader("📈 Hourly Trends")
 
-hourly = filtered_data.groupby(['hr'])['cnt'].mean().reset_index()
+hourly = filtered_data.groupby('hr')['cnt'].mean().reset_index()
 
 fig = px.line(hourly, x='hr', y='cnt', markers=True)
 st.plotly_chart(fig, use_container_width=True)
@@ -211,4 +216,4 @@ st.plotly_chart(fig, use_container_width=True)
 # -------------------------------
 # FOOTER
 # -------------------------------
-st.info("Ensure model was trained with same feature pipeline.")
+st.info("Ensure model was trained with same preprocessing pipeline.")
